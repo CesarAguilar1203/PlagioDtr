@@ -1,60 +1,130 @@
 <?php
 session_start();
 
-// Inicializar documentos
-if (!isset($_SESSION['documentos'])) {
-    $_SESSION['documentos'] = [];
+$_SESSION['documentos'] = $_SESSION['documentos'] ?? [];
+
+/**
+ * Extrae texto de un PDF utilizando pdftotext.
+ */
+function extraerTextoPdf(string $ruta): ?string {
+    $salida = @shell_exec('pdftotext ' . escapeshellarg($ruta) . ' -');
+    return $salida ? trim($salida) : null;
 }
 
-// Guardar
-if (isset($_POST['guardar'])) {
-    $titulo = trim($_POST['titulo']);
-    $contenido = trim($_POST['contenido']);
+/**
+ * Tokeniza un texto normalizándolo y eliminando caracteres especiales.
+ */
+function tokenizar(string $texto): array {
+    $texto = strtolower($texto);
+    $texto = preg_replace('/[^\p{L}\p{N}\s]/u', '', $texto);
+    return array_unique(explode(' ', $texto));
+}
 
-    if ($titulo && $contenido) {
-        $_SESSION['documentos'][] = [
-            'id' => uniqid(),
-            'titulo' => $titulo,
-            'contenido' => $contenido
-        ];
+/**
+ * Guarda un documento en la sesión.
+ */
+function guardarDocumento(string $titulo, string $contenido): void {
+    if (!$titulo || !$contenido) {
+        return;
     }
+
+    $_SESSION['documentos'][] = [
+        'id' => uniqid(),
+        'titulo' => $titulo,
+        'contenido' => $contenido,
+    ];
 }
 
-// Comparar
-$resultado = null;
-if (isset($_POST['comparar'])) {
-    $id1 = $_POST['doc1'];
-    $id2 = $_POST['doc2'];
-
-    if ($id1 != $id2) {
-        $doc1 = null; $doc2 = null;
-        foreach ($_SESSION['documentos'] as $doc) {
-            if ($doc['id'] === $id1) $doc1 = $doc['contenido'];
-            if ($doc['id'] === $id2) $doc2 = $doc['contenido'];
+/**
+ * Obtiene el contenido de un documento por su ID.
+ */
+function obtenerContenidoPorId(string $id): ?string {
+    foreach ($_SESSION['documentos'] as $doc) {
+        if ($doc['id'] === $id) {
+            return $doc['contenido'];
         }
+    }
+    return null;
+}
 
-        if ($doc1 && $doc2) {
-            function tokenizar($t){
-                $t = strtolower($t);
-                $t = preg_replace('/[^\p{L}\p{N}\s]/u', '', $t);
-                return array_unique(explode(' ', $t));
+/**
+ * Compara dos documentos y devuelve similitud de Jaccard y frases idénticas.
+ */
+function compararDocumentos(string $id1, string $id2): ?array {
+    if ($id1 === $id2) {
+        return null;
+    }
+
+    $doc1 = obtenerContenidoPorId($id1);
+    $doc2 = obtenerContenidoPorId($id2);
+
+    if (!$doc1 || !$doc2) {
+        return null;
+    }
+
+    $tok1 = tokenizar($doc1);
+    $tok2 = tokenizar($doc2);
+    $inter = count(array_intersect($tok1, $tok2));
+    $union = count(array_unique(array_merge($tok1, $tok2)));
+    $jaccard = $union > 0 ? ($inter / $union) * 100 : 0;
+
+    $fr1 = explode('.', $doc1);
+    $fr2 = explode('.', $doc2);
+    $igs = [];
+    $fr2trim = array_map('trim', $fr2);
+    foreach ($fr1 as $f) {
+        $ftrim = trim($f);
+        if (strlen($ftrim) > 10 && in_array($ftrim, $fr2trim, true)) {
+            $igs[] = $ftrim;
+        }
+    }
+
+    return ['jaccard' => number_format($jaccard, 2), 'frases' => $igs];
+}
+
+/**
+ * Genera un PDF con el resumen de similitudes.
+ */
+function generarPdfResumen(array $res): void {
+    require_once __DIR__ . '/fpdf.php';
+    $pdf = new FPDF();
+    $pdf->AddPage();
+    $pdf->SetFont('Arial', 'B', 16);
+    $pdf->Cell(0, 10, 'Resumen de similitud', 0, 1);
+    $pdf->SetFont('Arial', '', 12);
+    $pdf->Cell(0, 10, 'Similitud Jaccard: ' . $res['jaccard'] . '%', 0, 1);
+    $pdf->Ln(5);
+    $pdf->Cell(0, 10, 'Frases identicas:', 0, 1);
+    foreach ($res['frases'] as $f) {
+        $pdf->MultiCell(0, 8, $f);
+    }
+    $pdf->Output('D', 'resumen.pdf');
+    exit;
+}
+
+$resultado = null;
+
+if (isset($_GET['reporte']) && isset($_SESSION['ultimo_resultado'])) {
+    generarPdfResumen($_SESSION['ultimo_resultado']);
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['guardar'])) {
+        $titulo = trim($_POST['titulo'] ?? '');
+        $contenido = trim($_POST['contenido'] ?? '');
+        if (!empty($_FILES['archivo']['tmp_name'])) {
+            $textoPdf = extraerTextoPdf($_FILES['archivo']['tmp_name']);
+            if ($textoPdf !== null) {
+                $contenido = $textoPdf;
             }
-
-            $tok1 = tokenizar($doc1);
-            $tok2 = tokenizar($doc2);
-            $inter = count(array_intersect($tok1,$tok2));
-            $union = count(array_unique(array_merge($tok1,$tok2)));
-            $j = $union>0 ? ($inter/$union)*100:0;
-
-            $fr1 = explode('.',$doc1);
-            $fr2 = explode('.',$doc2);
-            $igs = [];
-            foreach($fr1 as $f){
-                if(in_array(trim($f),array_map('trim',$fr2)) && strlen(trim($f))>10){
-                    $igs[] = trim($f);
-                }
-            }
-            $resultado=['jaccard'=>number_format($j,2),'frases'=>$igs];
+        }
+        guardarDocumento($titulo, $contenido);
+    } elseif (isset($_POST['comparar'])) {
+        $id1 = $_POST['doc1'] ?? '';
+        $id2 = $_POST['doc2'] ?? '';
+        $resultado = compararDocumentos($id1, $id2);
+        if ($resultado) {
+            $_SESSION['ultimo_resultado'] = $resultado;
         }
     }
 }
@@ -75,14 +145,18 @@ if (isset($_POST['comparar'])) {
         <div class="col-md-6">
             <div class="card shadow p-3 mb-4">
                 <h4>Subir Documento</h4>
-                <form method="POST">
+                <form method="POST" enctype="multipart/form-data">
                     <div class="mb-3">
                         <label class="form-label">Título</label>
                         <input type="text" name="titulo" class="form-control" required>
                     </div>
                     <div class="mb-3">
+                        <label class="form-label">Archivo PDF (opcional)</label>
+                        <input type="file" name="archivo" class="form-control" accept="application/pdf">
+                    </div>
+                    <div class="mb-3">
                         <label class="form-label">Contenido</label>
-                        <textarea name="contenido" class="form-control" rows="5" required></textarea>
+                        <textarea name="contenido" class="form-control" rows="5"></textarea>
                     </div>
                     <button type="submit" name="guardar" class="btn btn-primary w-100">Guardar</button>
                 </form>
@@ -159,19 +233,20 @@ if (isset($_POST['comparar'])) {
         <?php else: ?>
             <p>No se encontraron frases idénticas.</p>
         <?php endif; ?>
+        <a href="?reporte=1" class="btn btn-secondary mt-3">Descargar resumen PDF</a>
     </div>
     <?php endif; ?>
 </div>
 
 <script>
-document.addEventListener("DOMContentLoaded",()=>{
-    document.querySelectorAll('.verDoc').forEach(item=>{
-        item.addEventListener('click',()=>{
+document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll('.verDoc').forEach(item => {
+        item.addEventListener('click', () => {
             const t = item.getAttribute('data-titulo');
             const c = item.getAttribute('data-contenido');
             document.getElementById('visorTitulo').textContent = t;
             document.getElementById('visorContenido').textContent = c;
-            document.getElementById('visor').style.display='block';
+            document.getElementById('visor').style.display = 'block';
         });
     });
 });
