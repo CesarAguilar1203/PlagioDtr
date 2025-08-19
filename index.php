@@ -1,6 +1,5 @@
 <?php
 session_start();
-
 $_SESSION['documentos'] = $_SESSION['documentos'] ?? [];
 
 /**
@@ -24,10 +23,7 @@ function tokenizar(string $texto): array {
  * Guarda un documento en la sesión.
  */
 function guardarDocumento(string $titulo, string $contenido): void {
-    if (!$titulo || !$contenido) {
-        return;
-    }
-
+    if (!$titulo || !$contenido) return;
     $_SESSION['documentos'][] = [
         'id' => uniqid(),
         'titulo' => $titulo,
@@ -40,17 +36,22 @@ function guardarDocumento(string $titulo, string $contenido): void {
  */
 function obtenerContenidoPorId(string $id): ?string {
     foreach ($_SESSION['documentos'] as $doc) {
-        if ($doc['id'] === $id) {
-            return $doc['contenido'];
-        }
+        if ($doc['id'] === $id) return $doc['contenido'];
     }
     return null;
 }
 
 /**
- * Compara dos textos y devuelve similitud de Jaccard y frases idénticas.
+ * Compara dos documentos y devuelve similitud de Jaccard y frases idénticas.
  */
-function compararTextos(string $doc1, string $doc2): array {
+function compararDocumentos(string $id1, string $id2): ?array {
+    if ($id1 === $id2) return null;
+
+    $doc1 = obtenerContenidoPorId($id1);
+    $doc2 = obtenerContenidoPorId($id2);
+
+    if (!$doc1 || !$doc2) return null;
+
     $tok1 = tokenizar($doc1);
     $tok2 = tokenizar($doc2);
     $inter = count(array_intersect($tok1, $tok2));
@@ -67,26 +68,7 @@ function compararTextos(string $doc1, string $doc2): array {
             $igs[] = $ftrim;
         }
     }
-
     return ['jaccard' => number_format($jaccard, 2), 'frases' => $igs];
-}
-
-/**
- * Compara dos documentos almacenados identificados por sus IDs.
- */
-function compararDocumentos(string $id1, string $id2): ?array {
-    if ($id1 === $id2) {
-        return null;
-    }
-
-    $doc1 = obtenerContenidoPorId($id1);
-    $doc2 = obtenerContenidoPorId($id2);
-
-    if (!$doc1 || !$doc2) {
-        return null;
-    }
-
-    return compararTextos($doc1, $doc2);
 }
 
 /**
@@ -121,11 +103,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $contenido = trim($_POST['contenido'] ?? '');
         if (!empty($_FILES['archivo']['tmp_name'])) {
             $textoPdf = extraerTextoPdf($_FILES['archivo']['tmp_name']);
-            if ($textoPdf !== null) {
-                $contenido = $textoPdf;
-            }
+            if ($textoPdf !== null) $contenido = $textoPdf;
         }
         guardarDocumento($titulo, $contenido);
+
     } elseif (isset($_POST['comparar'])) {
         $id1 = $_POST['doc1'] ?? '';
         $id2 = $_POST['doc2'] ?? '';
@@ -133,13 +114,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($resultado) {
             $_SESSION['ultimo_resultado'] = $resultado;
         }
+
     } elseif (isset($_POST['comparar_pdf'])) {
         $pdf1 = $_FILES['pdf1']['tmp_name'] ?? '';
         $pdf2 = $_FILES['pdf2']['tmp_name'] ?? '';
         $texto1 = $pdf1 ? extraerTextoPdf($pdf1) : null;
         $texto2 = $pdf2 ? extraerTextoPdf($pdf2) : null;
         if ($texto1 && $texto2) {
-            $resultado = compararTextos($texto1, $texto2);
+            // usar la lógica de comparación directamente con el texto
+            $tok1 = tokenizar($texto1);
+            $tok2 = tokenizar($texto2);
+            $inter = count(array_intersect($tok1, $tok2));
+            $union = count(array_unique(array_merge($tok1, $tok2)));
+            $jaccard = $union > 0 ? ($inter / $union) * 100 : 0;
+
+            $fr1 = explode('.', $texto1);
+            $fr2 = explode('.', $texto2);
+            $igs = [];
+            $fr2trim = array_map('trim', $fr2);
+            foreach ($fr1 as $f) {
+                $ftrim = trim($f);
+                if (strlen($ftrim) > 10 && in_array($ftrim, $fr2trim, true)) {
+                    $igs[] = $ftrim;
+                }
+            }
+            $resultado = ['jaccard' => number_format($jaccard, 2), 'frases' => $igs];
             $_SESSION['ultimo_resultado'] = $resultado;
         }
     }
