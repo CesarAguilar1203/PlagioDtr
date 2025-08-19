@@ -1,6 +1,5 @@
 <?php
 session_start();
-
 $_SESSION['documentos'] = $_SESSION['documentos'] ?? [];
 
 /**
@@ -24,10 +23,7 @@ function tokenizar(string $texto): array {
  * Guarda un documento en la sesión.
  */
 function guardarDocumento(string $titulo, string $contenido): void {
-    if (!$titulo || !$contenido) {
-        return;
-    }
-
+    if (!$titulo || !$contenido) return;
     $_SESSION['documentos'][] = [
         'id' => uniqid(),
         'titulo' => $titulo,
@@ -40,9 +36,7 @@ function guardarDocumento(string $titulo, string $contenido): void {
  */
 function obtenerContenidoPorId(string $id): ?string {
     foreach ($_SESSION['documentos'] as $doc) {
-        if ($doc['id'] === $id) {
-            return $doc['contenido'];
-        }
+        if ($doc['id'] === $id) return $doc['contenido'];
     }
     return null;
 }
@@ -51,16 +45,12 @@ function obtenerContenidoPorId(string $id): ?string {
  * Compara dos documentos y devuelve similitud de Jaccard y frases idénticas.
  */
 function compararDocumentos(string $id1, string $id2): ?array {
-    if ($id1 === $id2) {
-        return null;
-    }
+    if ($id1 === $id2) return null;
 
     $doc1 = obtenerContenidoPorId($id1);
     $doc2 = obtenerContenidoPorId($id2);
 
-    if (!$doc1 || !$doc2) {
-        return null;
-    }
+    if (!$doc1 || !$doc2) return null;
 
     $tok1 = tokenizar($doc1);
     $tok2 = tokenizar($doc2);
@@ -78,7 +68,6 @@ function compararDocumentos(string $id1, string $id2): ?array {
             $igs[] = $ftrim;
         }
     }
-
     return ['jaccard' => number_format($jaccard, 2), 'frases' => $igs];
 }
 
@@ -114,16 +103,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $contenido = trim($_POST['contenido'] ?? '');
         if (!empty($_FILES['archivo']['tmp_name'])) {
             $textoPdf = extraerTextoPdf($_FILES['archivo']['tmp_name']);
-            if ($textoPdf !== null) {
-                $contenido = $textoPdf;
-            }
+            if ($textoPdf !== null) $contenido = $textoPdf;
         }
         guardarDocumento($titulo, $contenido);
+
     } elseif (isset($_POST['comparar'])) {
         $id1 = $_POST['doc1'] ?? '';
         $id2 = $_POST['doc2'] ?? '';
         $resultado = compararDocumentos($id1, $id2);
         if ($resultado) {
+            $_SESSION['ultimo_resultado'] = $resultado;
+        }
+
+    } elseif (isset($_POST['comparar_pdf'])) {
+        $pdf1 = $_FILES['pdf1']['tmp_name'] ?? '';
+        $pdf2 = $_FILES['pdf2']['tmp_name'] ?? '';
+        $texto1 = $pdf1 ? extraerTextoPdf($pdf1) : null;
+        $texto2 = $pdf2 ? extraerTextoPdf($pdf2) : null;
+        if ($texto1 && $texto2) {
+            // usar la lógica de comparación directamente con el texto
+            $tok1 = tokenizar($texto1);
+            $tok2 = tokenizar($texto2);
+            $inter = count(array_intersect($tok1, $tok2));
+            $union = count(array_unique(array_merge($tok1, $tok2)));
+            $jaccard = $union > 0 ? ($inter / $union) * 100 : 0;
+
+            $fr1 = explode('.', $texto1);
+            $fr2 = explode('.', $texto2);
+            $igs = [];
+            $fr2trim = array_map('trim', $fr2);
+            foreach ($fr1 as $f) {
+                $ftrim = trim($f);
+                if (strlen($ftrim) > 10 && in_array($ftrim, $fr2trim, true)) {
+                    $igs[] = $ftrim;
+                }
+            }
+            $resultado = ['jaccard' => number_format($jaccard, 2), 'frases' => $igs];
             $_SESSION['ultimo_resultado'] = $resultado;
         }
     }
@@ -141,7 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <div class="container mt-5">
     <h1 class="text-center mb-4">Detector de Plagio</h1>
     <div class="row">
-        <!-- subir -->
+        <!-- Sección: Subir Documento -->
         <div class="col-md-6">
             <div class="card shadow p-3 mb-4">
                 <h4>Subir Documento</h4>
@@ -163,7 +178,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         </div>
 
-        <!-- lista -->
+        <!-- Sección: Documentos Guardados -->
         <div class="col-md-6">
             <div class="card shadow p-3 mb-3">
                 <h4>Documentos Guardados</h4>
@@ -190,7 +205,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
     </div>
 
-    <!-- comparar -->
+    <!-- Sección: Comparar Documentos Guardados -->
     <div class="card shadow p-3 mb-4">
         <h4>Comparar Documentos</h4>
         <form method="POST">
@@ -218,7 +233,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </form>
     </div>
 
-    <!-- resultados -->
+    <!-- Sección: Comparar PDFs -->
+    <div class="card shadow p-3 mb-4">
+        <h4>Comparar PDFs</h4>
+        <form method="POST" enctype="multipart/form-data">
+            <div class="row">
+                <div class="col-md-5 mb-3">
+                    <input type="file" name="pdf1" class="form-control" accept="application/pdf" required>
+                </div>
+                <div class="col-md-5 mb-3">
+                    <input type="file" name="pdf2" class="form-control" accept="application/pdf" required>
+                </div>
+                <div class="col-md-2 mb-3">
+                    <button type="submit" name="comparar_pdf" class="btn btn-success w-100">Comparar</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <!-- Sección: Resultados -->
     <?php if ($resultado): ?>
     <div class="card shadow p-3 mb-4">
         <h4>Resultados</h4>
